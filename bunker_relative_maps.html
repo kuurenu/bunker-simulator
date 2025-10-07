@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>総統地下壕・相対位置シミュレーター</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: sans-serif; }
+    #map { height: 100%; width: 100%; }
+    .gm-style-iw { font-size: 14px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+  // Frohnau / Pankow / Lichtenberg / Karlshorst の相対距離・方位（基準：ベルリンの地下壕）
+  const RELATIVE_POINTS = [
+    { name: 'Frohnau', dist: 15.4, bearing: 326, color: '#ff4444' },
+    { name: 'Pankow', dist: 10.3, bearing: 33, color: '#00aaff' },
+    { name: 'Lichtenberg', dist: 8.2, bearing: 68, color: '#00ffaa' },
+    { name: 'Karlshorst', dist: 10.2, bearing: 109, color: '#ffaa00' }
+  ];
+
+  // 球面上の目的地座標を求める関数
+  function destinationPoint(lat, lon, bearing, distanceKm) {
+    const R = 6371.0; // 地球半径 km
+    const d = distanceKm / R;
+    const br = bearing * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lon * Math.PI / 180;
+
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(br));
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(br) * Math.sin(d) * Math.cos(lat1),
+      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return { lat: lat2 * 180 / Math.PI, lng: lon2 * 180 / Math.PI };
+  }
+
+  let map, bunkerMarker, relativeMarkers = [], lines = [];
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById('map'), {
+      center: { lat: 52.520008, lng: 13.404954 }, // Berlin中心付近
+      zoom: 12,
+      mapTypeId: 'terrain'
+    });
+
+    const info = new google.maps.InfoWindow({
+      content: '地図をクリックして基準点（総統地下壕）を指定してください。'
+    });
+    info.open(map);
+
+    map.addListener('click', (e) => {
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      setBunker({ lat, lng });
+    });
+  }
+
+  function clearMap() {
+    relativeMarkers.forEach(m => m.setMap(null));
+    lines.forEach(l => l.setMap(null));
+    relativeMarkers = [];
+    lines = [];
+  }
+
+  function setBunker(pos) {
+    clearMap();
+    if (bunkerMarker) bunkerMarker.setMap(null);
+
+    bunkerMarker = new google.maps.Marker({
+      position: pos,
+      map,
+      title: '基準点（総統地下壕）',
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: '#000000',
+        fillOpacity: 1,
+        strokeWeight: 1,
+        strokeColor: '#ffffff'
+      }
+    });
+
+    map.panTo(pos);
+
+    // 各方向のポイントを計算
+    RELATIVE_POINTS.forEach(p => {
+      const dest = destinationPoint(pos.lat, pos.lng, p.bearing, p.dist);
+      const marker = new google.maps.Marker({
+        position: dest,
+        map,
+        title: `${p.name} (距離: ${p.dist}km / 方位: ${p.bearing}°)` ,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 6,
+          fillColor: p.color,
+          fillOpacity: 1,
+          strokeWeight: 1,
+          strokeColor: '#111827'
+        }
+      });
+      relativeMarkers.push(marker);
+
+      const line = new google.maps.Polyline({
+        path: [pos, dest],
+        map,
+        strokeColor: p.color,
+        strokeOpacity: 0.9,
+        strokeWeight: 2
+      });
+      lines.push(line);
+    });
+  }
+</script>
+
+<!-- 自分のGoogle Maps APIキーを入れてください -->
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDUGDxNKfCh0Hc-aHTlzb2N_tA6kSJfbo8&callback=initMap"></script>
+</body>
+</html>
