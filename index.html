@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>総統地下壕・相対位置シミュレーター</title>
+  <title>侵攻ライン可視化シミュレーター</title>
   <style>
     html, body { height: 100%; margin: 0; font-family: sans-serif; }
     #map { height: 100%; width: 100%; }
@@ -11,113 +11,171 @@
   </style>
 </head>
 <body>
-<div id="map"></div>
+  <div id="map"></div>
 
-<script>
-  // Frohnau / Pankow / Lichtenberg / Karlshorst / Zossen の相対距離・方位（基準：ベルリンの地下壕）
-  const RELATIVE_POINTS = [
-    { name: 'Frohnau', dist: 15.4, bearing: 326, color: '#ff4444' },
-    { name: 'Pankow', dist: 10.3, bearing: 33, color: '#00aaff' },
-    { name: 'Lichtenberg', dist: 8.2, bearing: 68, color: '#00ffaa' },
-    { name: 'Karlshorst', dist: 10.2, bearing: 109, color: '#ffaa00' },
-    { name: 'Zossen', dist: 28.8, bearing: 176, color: '#aa44ff' } // 新規追加：Zossen
-  ];
+  <script>
+    // 映画設定モデルに基づく前線ラインモデル（基準点からの相対距離・方位）
+    const FRONT_MODEL = {
+      north: { dist: 8.0, bearing: 30, // 仮定：Frohnau–Pankow の北縁を基準点から 8 km 方向 30° 相当として想定
+        color: '#ff6600' },
+      east:  { dist: 6.0, bearing: 70, // 仮定：東線 Lichtenberg–Karlshorst あたりまで
+        color: '#ff3300' },
+      south: { dist: 30.0, bearing: 176, // ツォッセン超過方向
+        color: '#cc0000' }
+    };
 
-  // 球面上の目的地座標を求める関数
-  function destinationPoint(lat, lon, bearing, distanceKm) {
-    const R = 6371.0; // 地球半径 km
-    const d = distanceKm / R;
-    const br = bearing * Math.PI / 180;
-    const lat1 = lat * Math.PI / 180;
-    const lon1 = lon * Math.PI / 180;
+    // 既存相対マーカーモデルも残す（Frohnau, Pankow, Lichtenberg, Karlshorst, Zossen）
+    const RELATIVE_POINTS = [
+      { name: 'Frohnau', dist: 15.4, bearing: 326, color: '#ff4444' },
+      { name: 'Pankow', dist: 10.3, bearing: 33, color: '#00aaff' },
+      { name: 'Lichtenberg', dist: 8.2, bearing: 68, color: '#00ffaa' },
+      { name: 'Karlshorst', dist: 10.2, bearing: 109, color: '#ffaa00' },
+      { name: 'Zossen', dist: 28.8, bearing: 176, color: '#aa44ff' }
+    ];
 
-    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(br));
-    const lon2 = lon1 + Math.atan2(
-      Math.sin(br) * Math.sin(d) * Math.cos(lat1),
-      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
-    );
-    return { lat: lat2 * 180 / Math.PI, lng: lon2 * 180 / Math.PI };
-  }
+    function destinationPoint(lat, lon, bearing, distanceKm) {
+      const R = 6371.0;
+      const d = distanceKm / R;
+      const br = bearing * Math.PI / 180;
+      const lat1 = lat * Math.PI / 180;
+      const lon1 = lon * Math.PI / 180;
 
-  let map, bunkerMarker, relativeMarkers = [], lines = [];
+      const lat2 = Math.asin(
+        Math.sin(lat1) * Math.cos(d)
+        + Math.cos(lat1) * Math.sin(d) * Math.cos(br)
+      );
+      const lon2 = lon1 + Math.atan2(
+        Math.sin(br) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+      );
+      return { lat: lat2 * 180 / Math.PI, lng: lon2 * 180 / Math.PI };
+    }
 
-  function initMap() {
-    map = new google.maps.Map(document.getElementById('map'), {
-      center: { lat: 52.520008, lng: 13.404954 }, // Berlin中心付近
-      zoom: 12,
-      mapTypeId: 'terrain'
-    });
+    let map, bunkerMarker;
+    let relativeMarkers = [], lines = [];
+    let boundaryLines = [], filledArea = null;
 
-    const info = new google.maps.InfoWindow({
-      content: '地図をクリックして基準点（総統地下壕）を指定してください。'
-    });
-    info.open(map);
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 52.520008, lng: 13.404954 },
+        zoom: 11,
+        mapTypeId: 'terrain'
+      });
 
-    map.addListener('click', (e) => {
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      setBunker({ lat, lng });
-    });
-  }
+      const info = new google.maps.InfoWindow({
+        content: '地図をクリックして基準点を指定すると、前線モデルを描画します。'
+      });
+      info.open(map);
 
-  function clearMap() {
-    relativeMarkers.forEach(m => m.setMap(null));
-    lines.forEach(l => l.setMap(null));
-    relativeMarkers = [];
-    lines = [];
-  }
+      map.addListener('click', (e) => {
+        const lat = e.latLng.lat();
+        const lng = e.latLng.lng();
+        setBunker({ lat, lng });
+      });
+    }
 
-  function setBunker(pos) {
-    clearMap();
-    if (bunkerMarker) bunkerMarker.setMap(null);
+    function clearMap() {
+      relativeMarkers.forEach(m => m.setMap(null));
+      lines.forEach(l => l.setMap(null));
+      boundaryLines.forEach(l => l.setMap(null));
+      if (filledArea) filledArea.setMap(null);
 
-    bunkerMarker = new google.maps.Marker({
-      position: pos,
-      map,
-      title: '基準点（総統地下壕）',
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: 8,
-        fillColor: '#000000',
-        fillOpacity: 1,
-        strokeWeight: 1,
-        strokeColor: '#ffffff'
-      }
-    });
+      relativeMarkers = [];
+      lines = [];
+      boundaryLines = [];
+      filledArea = null;
+    }
 
-    map.panTo(pos);
-
-    // 各方向のポイントを計算
-    RELATIVE_POINTS.forEach(p => {
-      const dest = destinationPoint(pos.lat, pos.lng, p.bearing, p.dist);
-      const marker = new google.maps.Marker({
-        position: dest,
+    function setBunker(pos) {
+      clearMap();
+      if (bunkerMarker) bunkerMarker.setMap(null);
+      bunkerMarker = new google.maps.Marker({
+        position: pos,
         map,
-        title: `${p.name} (距離: ${p.dist}km / 方位: ${p.bearing}°)` ,
+        title: '基準点（総統地下壕）',
         icon: {
           path: google.maps.SymbolPath.CIRCLE,
-          scale: 6,
-          fillColor: p.color,
+          scale: 8,
+          fillColor: '#000000',
           fillOpacity: 1,
           strokeWeight: 1,
-          strokeColor: '#111827'
+          strokeColor: '#ffffff'
         }
       });
-      relativeMarkers.push(marker);
+      map.panTo(pos);
 
-      const line = new google.maps.Polyline({
-        path: [pos, dest],
-        map,
-        strokeColor: p.color,
-        strokeOpacity: 0.9,
-        strokeWeight: 2
+      // 相対マーカー＋ライン
+      RELATIVE_POINTS.forEach(p => {
+        const dest = destinationPoint(pos.lat, pos.lng, p.bearing, p.dist);
+        const marker = new google.maps.Marker({
+          position: dest,
+          map,
+          title: `${p.name} (距離: ${p.dist}km / 方位: ${p.bearing}°)`,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 6,
+            fillColor: p.color,
+            fillOpacity: 1,
+            strokeWeight: 1,
+            strokeColor: '#111827'
+          }
+        });
+        relativeMarkers.push(marker);
+
+        const line = new google.maps.Polyline({
+          path: [pos, dest],
+          map,
+          strokeColor: p.color,
+          strokeOpacity: 0.9,
+          strokeWeight: 2
+        });
+        lines.push(line);
       });
-      lines.push(line);
-    });
-  }
-</script>
 
-<!-- 自分のGoogle Maps APIキーを入れてください -->
-<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDUGDxNKfCh0Hc-aHTlzb2N_tA6kSJfbo8&callback=initMap"></script>
+      // 境界ラインを描く
+      const boundaryData = Object.entries(FRONT_MODEL).map(([key, val]) => {
+        const end = destinationPoint(pos.lat, pos.lng, val.bearing, val.dist);
+        return { key, start: pos, end: end, color: val.color };
+      });
+
+      boundaryData.forEach(bd => {
+        const bl = new google.maps.Polyline({
+          path: [bd.start, bd.end],
+          map,
+          strokeColor: bd.color,
+          strokeOpacity: 0.6,
+          strokeWeight: 3,
+          icons: [{
+            icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
+            offset: '0',
+            repeat: '20px'
+          }]
+        });
+        boundaryLines.push(bl);
+      });
+
+      // 境界内領域を塗る（基準点を含むポリゴン）
+      const polyCoords = boundaryData.map(bd => bd.end);
+      // 順序が不正だと地形でおかしくなるのでソート（時計回りなど簡易）
+      polyCoords.sort((a, b) => Math.atan2(a.lng - pos.lng, a.lat - pos.lat) - Math.atan2(b.lng - pos.lng, b.lat - pos.lat));
+
+      // 最後に基準点を閉じ点として追加
+      const polygonPath = [pos].concat(polyCoords).concat([pos]);
+      filledArea = new google.maps.Polygon({
+        paths: polygonPath,
+        strokeColor: '#880000',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#ff4444',
+        fillOpacity: 0.3,
+        map
+      });
+    }
+
+    // APIキーを自分のものに置き換えてください
+    </script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDUGDxNKfCh0Hc-aHTlzb2N_tA6kSJfbo8&callback=initMap"></script>
 </body>
 </html>
+
+
